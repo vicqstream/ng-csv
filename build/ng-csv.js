@@ -27,6 +27,11 @@ angular.module('ngCsv',
         'ngCsv.directives',
         'ngSanitize'
     ]);
+
+// Common.js package manager support (e.g. ComponentJS, WebPack)
+if (typeof module !== 'undefined' && typeof exports !== 'undefined' && module.exports === exports) {
+  module.exports = 'ngCsv';
+}
 /**
  * Created by asafdav on 15/05/14.
  */
@@ -35,6 +40,14 @@ angular.module('ngCsv.services').
 
     var EOL = '\r\n';
     var BOM = "\ufeff";
+
+    var specialChars = {
+      '\\t': '\t',
+      '\\b': '\b',
+      '\\v': '\v',
+      '\\f': '\f',
+      '\\r': '\r'
+    };
 
     /**
      * Stringify one field
@@ -94,7 +107,7 @@ angular.module('ngCsv.services').
       var csvContent = "";
 
       var dataPromise = $q.when(data).then(function (responseData) {
-        responseData = angular.copy(responseData);
+        //responseData = angular.copy(responseData);//moved to row creation
         // Check if there's a provided header array
         if (angular.isDefined(options.header) && options.header) {
           var encodingArray, headerString;
@@ -117,13 +130,31 @@ angular.module('ngCsv.services').
           arrData = responseData();
         }
 
-        angular.forEach(arrData, function (row, index) {
+        // Check if using keys as labels
+        if (angular.isDefined(options.label) && options.label && typeof options.label === 'boolean') {
+            var labelArray, labelString;
+
+            labelArray = [];
+
+            var iterator = !!options.columnOrder ? options.columnOrder : arrData[0];
+            angular.forEach(iterator, function(value, label) {
+                var val = !!options.columnOrder ? value : label;
+                this.push(that.stringifyField(val, options));
+            }, labelArray);
+            labelString = labelArray.join(options.fieldSep ? options.fieldSep : ",");
+            csvContent += labelString + EOL;
+        }
+
+        angular.forEach(arrData, function (oldRow, index) {
+          var row = angular.copy(arrData[index]);
           var dataString, infoArray;
 
           infoArray = [];
 
-          angular.forEach(row, function (field, key) {
-            this.push(that.stringifyField(field, options));
+          var iterator = !!options.columnOrder ? options.columnOrder : row;
+          angular.forEach(iterator, function (field, key) {
+            var val = !!options.columnOrder ? row[field] : field;
+            this.push(that.stringifyField(val, options));
           }, infoArray);
 
           dataString = infoArray.join(options.fieldSep ? options.fieldSep : ",");
@@ -148,6 +179,27 @@ angular.module('ngCsv.services').
 
       return def.promise;
     };
+
+    /**
+     * Helper function to check if input is really a special character
+     * @param input
+     * @returns {boolean}
+     */
+    this.isSpecialChar = function(input){
+      return specialChars[input] !== undefined;
+    };
+
+    /**
+     * Helper function to get what the special character was supposed to be
+     * since Angular escapes the first backslash
+     * @param input
+     * @returns {special character string}
+     */
+    this.getSpecialChar = function (input) {
+      return specialChars[input];
+    };
+
+
   }]);
 /**
  * ng-csv module
@@ -163,6 +215,7 @@ angular.module('ngCsv.directives').
         data: '&ngCsv',
         filename: '@filename',
         header: '&csvHeader',
+        columnOrder: '&csvColumnOrder',
         txtDelim: '@textDelimiter',
         decimalSep: '@decimalSeparator',
         quoteStrings: '@quoteStrings',
@@ -170,7 +223,9 @@ angular.module('ngCsv.directives').
         lazyLoad: '@lazyLoad',
         addByteOrderMarker: "@addBom",
         ngClick: '&',
-        charset: '@charset'
+        charset: '@charset',
+        label: '&csvLabel',
+        downloadLink: '='
       },
       controller: [
         '$scope',
@@ -200,7 +255,13 @@ angular.module('ngCsv.directives').
               addByteOrderMarker: $scope.addByteOrderMarker
             };
             if (angular.isDefined($attrs.csvHeader)) options.header = $scope.$eval($scope.header);
+            if (angular.isDefined($attrs.csvColumnOrder)) options.columnOrder = $scope.$eval($scope.columnOrder);
+            if (angular.isDefined($attrs.csvLabel)) options.label = $scope.$eval($scope.label);
+
             options.fieldSep = $scope.fieldSep ? $scope.fieldSep : ",";
+
+            // Replaces any badly formatted special character string with correct special character
+            options.fieldSep = CSV.isSpecialChar(options.fieldSep) ? CSV.getSpecialChar(options.fieldSep) : options.fieldSep;
 
             return options;
           }
@@ -226,26 +287,27 @@ angular.module('ngCsv.directives').
         }
       ],
       link: function (scope, element, attrs) {
+        var downloadElement = document.querySelector( '#' + scope.downloadLink);
+        var targetElement = downloadElement ? angular.element(downloadElement) : element;
+
+        if (downloadElement){
+          targetElement.addClass('ng-hide');
+        }
+
         function doClick() {
           var charset = scope.charset || "utf-8";
           var blob = new Blob([scope.csv], {
             type: "text/csv;charset="+ charset + ";"
           });
 
-          if (window.navigator.msSaveOrOpenBlob) {
-            navigator.msSaveBlob(blob, scope.getFilename());
+          targetElement.attr('href', window.URL.createObjectURL(blob));
+          targetElement.attr('download', scope.getFilename());
+          targetElement.attr('target', '_blank');
+
+          if (downloadElement){
+            targetElement.removeClass('ng-hide');
           } else {
-
-            var downloadLink = angular.element('<a></a>');
-            downloadLink.attr('href', window.URL.createObjectURL(blob));
-            downloadLink.attr('download', scope.getFilename());
-            downloadLink.attr('target', '_blank');
-
-            $document.find('body').append(downloadLink);
-            $timeout(function () {
-              downloadLink[0].click();
-              downloadLink.remove();
-            }, null);
+            element.unbind('click');
           }
         }
 
